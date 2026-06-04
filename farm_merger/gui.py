@@ -17,6 +17,10 @@ stop_hotkey = {"f2"}
 merging_points = list()
 resize_factor = 1
 
+# New Global Variables for AFK Logic
+spawner_point = None
+drag_points = list()
+
 class LogQueue:
     def __init__(self):
         self.queue = Queue()
@@ -27,16 +31,18 @@ queue = LogQueue()
 
 def create_gui():
     dpg.create_context()
-    with dpg.window(label="Farm Merger v0.1", no_title_bar=True, no_move=True, no_collapse=True, width=400, height=550):
-        dpg.add_text("Farm Merger v0.1", color=(255, 165, 0))
+    with dpg.window(label="Farm Merger v0.2", no_title_bar=True, no_move=True, no_collapse=True, width=400, height=650):
+        dpg.add_text("Farm Merger v0.2 AFK", color=(255, 165, 0))
         dpg.add_spacer(height=5)
-        dpg.add_text("** Disclaimer: Image recognition using openCV, mouse moving using pixel coordinates, so remember to update the merging slots after moving the map, always keep the gameplay on top of other windows", wrap=300)
+        dpg.add_text("** Disclaimer: Keep the gameplay on top. Setup your Spawner and Map Reset to allow infinite AFK loops.", wrap=300)
         dpg.add_spacer(height=20)
         
         add_merge_count_selector()
         add_hotkey_selectors()
         add_screen_area_selector()
         add_merging_slots_selector()
+        add_spawner_selector()
+        add_drag_selector()
         add_zoom_level_selector()
         add_start_stop_buttons()
         add_log_output()
@@ -62,14 +68,28 @@ def add_hotkey_selector(label, tag, callback, key):
 def add_screen_area_selector():
     with dpg.group(horizontal=True):
         dpg.add_text("Screen Area: ")
-        dpg.add_button(label="", callback=select_area_callback, tag="area_info", width=200)
+        dpg.add_button(label="[ Select ]", callback=select_area_callback, tag="area_info", width=200)
     dpg.add_spacer(height=10)
 
 def add_merging_slots_selector():
     with dpg.group(horizontal=True):
         dpg.add_text("Merging Slots: ")
-        dpg.add_button(label="", callback=select_merging_points_callback, tag="merging_points", width=200)
+        dpg.add_button(label="[ Select ]", callback=select_merging_points_callback, tag="merging_points", width=200)
     dpg.add_spacer(height=10)
+
+# --- NEW AFK SELECTORS ---
+def add_spawner_selector():
+    with dpg.group(horizontal=True):
+        dpg.add_text("Spawner Box: ")
+        dpg.add_button(label="[ Select ]", callback=select_spawner_point_callback, tag="spawner_point_btn", width=200)
+    dpg.add_spacer(height=10)
+
+def add_drag_selector():
+    with dpg.group(horizontal=True):
+        dpg.add_text("Map Reset Drag: ")
+        dpg.add_button(label="[ Select Start & End ]", callback=select_drag_points_callback, tag="drag_points_btn", width=200)
+    dpg.add_spacer(height=10)
+# -------------------------
 
 def add_zoom_level_selector():
     with dpg.group(horizontal=True):
@@ -103,7 +123,7 @@ def create_button_theme(button_color, hovered_color, active_color, text_color):
     return theme
 
 def setup_viewport():
-    dpg.create_viewport(title="Farm Merger", width=400, height=550)
+    dpg.create_viewport(title="Farm Merger", width=400, height=650)
     dpg.setup_dearpygui()
     dpg.show_viewport()
     dpg.start_dearpygui()
@@ -113,7 +133,9 @@ def get_image_file_paths(folder):
     image_files = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith(('.png', '.jpg', '.jpeg'))]
     return sorted(image_files, reverse=True)
 
-def start_merge(log_queue, area, resize_factor, merge_count, merging_points, stop_hotkey):
+
+# --- UPDATED MERGE LOOP WITH AFK LOGIC ---
+def start_merge(log_queue, area, resize_factor, merge_count, merging_points, stop_hotkey, spawner_point, drag_points):
     def terminate_merge_process():
         log_message("Stopping merge process...")
     
@@ -126,39 +148,70 @@ def start_merge(log_queue, area, resize_factor, merge_count, merging_points, sto
     log_message("Getting image files...")
     image_files = get_image_file_paths(img_folder)
 
-    if not validate_merge_parameters(area, resize_factor, merge_count, merging_points):
+    if not validate_merge_parameters(area, resize_factor, merge_count, merging_points, spawner_point, drag_points):
         return
 
-    log_message("Starting merge process...")
-    while True:
-        if not perform_merge_cycle(image_files, area, resize_factor, merge_count, merging_points, log_message):
-            break
-    
-    log_message("No more merges to perform.")
-    log_message("Pausing... Please resume with hotkey.")
+    log_message("Starting AFK merge loop...")
+    merge_counter = 0
 
-def validate_merge_parameters(area, resize_factor, merge_count, merging_points):
+    while True:
+        merged_this_cycle = perform_merge_cycle(image_files, area, resize_factor, merge_count, merging_points, log_message)
+        
+        if merged_this_cycle:
+            merge_counter += 1
+        else:
+            # If no merges were found, evaluate the spawn logic
+            if merge_counter > 0:
+                clicks_needed = merge_counter * 3
+                log_message(f"Found 0 items. Spawning {clicks_needed} new items...")
+                
+                # 1. Click Spawner Box
+                pyautogui.mouseUp()
+                pyautogui.moveTo(spawner_point[0], spawner_point[1])
+                pyautogui.click(clicks=clicks_needed, interval=0.1)
+                pyautogui.sleep(0.5)
+                
+                # 2. Map Reset Drag
+                log_message("Resetting map position...")
+                pyautogui.moveTo(drag_points[0][0], drag_points[0][1])
+                pyautogui.mouseDown()
+                pyautogui.moveTo(drag_points[1][0], drag_points[1][1], duration=0.5)
+                pyautogui.mouseUp()
+                pyautogui.sleep(0.5)
+                
+                # 3. Reset Counter
+                merge_counter = 0
+            else:
+                # Idle state: Nothing to merge, nothing to spawn
+                log_message("Waiting for crops to grow...")
+                pyautogui.sleep(2)
+# ----------------------------------------
+
+
+def validate_merge_parameters(area, resize_factor, merge_count, merging_points, spawner_point, drag_points):
     if len(area) != 4:
         log_message("Error: Screen area not properly set.")
         return False
-    
     if resize_factor == 0:
         log_message("Error: Resize factor not set or invalid.")
         return False
-    
     if len(merging_points) < merge_count - 1:
-        log_message(f"Error: Not enough merging points set. Expected {merge_count - 1}, got {len(merging_points)}.")
+        log_message(f"Error: Not enough merging points. Expected {merge_count - 1}, got {len(merging_points)}.")
         return False
-    
+    if not spawner_point:
+        log_message("Error: Spawner point not set.")
+        return False
+    if len(drag_points) != 2:
+        log_message("Error: Drag reset points not set (need 2 clicks).")
+        return False
     return True
 
 def perform_merge_cycle(image_files, area, resize_factor, merge_count, merging_points, log_message):
     for target_image in image_files:
         template_center_points, _ = ImageFinder.find_image_on_screen(target_image, *area, resize_factor)
-        if template_center_points:
-            log_message(f"Found {len(template_center_points)} for {target_image}")
         
         if len(template_center_points) > merge_count - 1 and len(merging_points) >= merge_count - 1:
+            log_message(f"Found {len(template_center_points)} for {target_image.split('/')[-1]}")
             perform_merge_operations(template_center_points, merging_points, merge_count, log_message)
             log_message("Dragging operations completed.")
             return True
@@ -166,7 +219,6 @@ def perform_merge_cycle(image_files, area, resize_factor, merge_count, merging_p
 
 def perform_merge_operations(template_center_points, merging_points, merge_count, log_message):
     for i in range(merge_count):
-        log_message(template_center_points[i])
         start_x, start_y = template_center_points[i]
         end_x, end_y = merging_points[i % (merge_count - 1)]
         
@@ -195,7 +247,7 @@ def update_merge_count(sender, app_data, user_data):
     global merge_count, merging_points
     merge_count = int(app_data)
     if merge_count - 1 > len(merging_points):
-        dpg.set_item_label("merging_points", "")
+        dpg.set_item_label("merging_points", "[ Select ]")
         merging_points = list()
 
 def log_message(message):
@@ -224,12 +276,12 @@ def terminate_merge_process():
     log_message("Terminated.")
 
 def start_merge_process():
-    global p, stop_hotkey, area, resize_factor, merge_count, merging_points
+    global p, stop_hotkey, area, resize_factor, merge_count, merging_points, spawner_point, drag_points
     if p is not None and p.is_alive():
         log_message("Merge process is already running.")
         return
     log_message("Starting merge process...")
-    p = Process(target=start_merge, args=(queue.get_queue(), area, resize_factor, merge_count, merging_points, stop_hotkey))
+    p = Process(target=start_merge, args=(queue.get_queue(), area, resize_factor, merge_count, merging_points, stop_hotkey, spawner_point, drag_points))
     p.start()
     while p.is_alive():
         update_log_message()
@@ -242,13 +294,15 @@ def start_button_callback():
     global hotkey
     dpg.hide_item("start_button")
     dpg.show_item("stop_button")
-    # Disable all buttons
+    
+    # Disable UI
     dpg.disable_item("merge_count")
     dpg.disable_item("hotkey_display")
     dpg.disable_item("stop_hotkey_display")
     dpg.disable_item("area_info")
-    # Disable input fields
     dpg.disable_item("merging_points")
+    dpg.disable_item("spawner_point_btn")
+    dpg.disable_item("drag_points_btn")
     dpg.disable_item("resize_factor")
     dpg.disable_item("calculate_resize_factor_button")
 
@@ -259,19 +313,41 @@ def start_button_callback():
 def stop_button_callback():
     dpg.hide_item("stop_button")
     dpg.show_item("start_button")
-    # Enable all buttons
+    
+    # Enable UI
     dpg.enable_item("merge_count")
     dpg.enable_item("hotkey_display")
     dpg.enable_item("stop_hotkey_display")
     dpg.enable_item("area_info")
-    # Disable input fields
     dpg.enable_item("merging_points")
+    dpg.enable_item("spawner_point_btn")
+    dpg.enable_item("drag_points_btn")
     dpg.enable_item("resize_factor")
     dpg.enable_item("calculate_resize_factor_button")
 
     log_message("Monitoring stopped")
     terminate_merge_process()
     keyboard.remove_hotkey(start_merge_process)
+
+# --- NEW SELECTION CALLBACKS ---
+def select_spawner_point_callback():
+    global spawner_point
+    dpg.set_item_label("spawner_point_btn", "Click the Spawner...")
+    selector = MergingPointsSelector(1)
+    pts = selector.get_points()
+    if pts:
+        spawner_point = pts[0]
+        dpg.set_item_label("spawner_point_btn", "Spawner Set")
+
+def select_drag_points_callback():
+    global drag_points
+    dpg.set_item_label("drag_points_btn", "Click Start then End...")
+    selector = MergingPointsSelector(2)
+    pts = selector.get_points()
+    if len(pts) == 2:
+        drag_points = pts
+        dpg.set_item_label("drag_points_btn", "Drag Map Set")
+# -------------------------------
 
 def select_merging_points_callback():
     global merging_points
