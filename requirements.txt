@@ -1,0 +1,6 @@
+opencv-python
+numpy
+PyAutoGUI
+pynput
+Pillow
+dearpygui
